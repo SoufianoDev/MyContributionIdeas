@@ -1,0 +1,53 @@
+name: Patched Kotlin/Native iOS codegen probe
+
+on:
+  push:
+    branches:
+      - ci/kmp-ios-host-probe
+    paths:
+      - ".github/workflows/kmp-ios-patched-codegen-probe.yml"
+      - "ci/kmp-ios-patched-compiler/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kmp-ios-patched-codegen-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patched-linux-codegen:
+    name: Build isolated Kotlin/Native patch and compile iOS codegen
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Check out research probe
+        uses: actions/checkout@v4
+
+      - name: Build isolated toolchain container
+        run: docker build --pull -t kmp-ios-patched-codegen -f ci/kmp-ios-patched-compiler/Dockerfile .
+
+      - name: Run patched compiler experiment
+        shell: bash
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/artifacts/patched-codegen"
+          mkdir -p "$RUNNER_TEMP/gradle-cache"
+          docker run --rm \
+            --cap-add SYS_PTRACE \
+            --security-opt seccomp=unconfined \
+            -v "$GITHUB_WORKSPACE:/probe:ro" \
+            -v "$GITHUB_WORKSPACE/artifacts/patched-codegen:/artifacts" \
+            -v "$RUNNER_TEMP/gradle-cache:/work/gradle-home" \
+            -w /probe \
+            kmp-ios-patched-codegen \
+            /probe/ci/kmp-ios-patched-compiler/run.sh
+
+      - name: Upload patched compiler evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmp-ios-patched-codegen-evidence
+          path: artifacts/patched-codegen/
+          if-no-files-found: warn
+          retention-days: 14

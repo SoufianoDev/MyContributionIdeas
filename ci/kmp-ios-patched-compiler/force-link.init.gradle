@@ -1,0 +1,10 @@
+gradle.projectsEvaluated {
+    allprojects { project ->
+        project.tasks.matching { it.name == "linkDebugExecutableIosArm64" }.configureEach { task ->
+            task.enabled = true
+            task.doFirst {
+                logger.lifecycle("KONAN_PROBE_FORCED_LINK_TASK=linkDebugExecutableIosArm64")
+            }
+        }
+    }
+}
