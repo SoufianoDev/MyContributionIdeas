@@ -1,0 +1,94 @@
+name: KMP iOS host feasibility probe
+
+on:
+  push:
+    branches:
+      - ci/kmp-ios-host-probe
+  pull_request:
+    paths:
+      - ".github/workflows/kmp-ios-host-probe.yml"
+      - "ci/kmp-ios-probe/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kmp-ios-host-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-docker:
+    name: Linux stock compiler in Ubuntu Docker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out probe
+        uses: actions/checkout@v4
+
+      - name: Build pinned Ubuntu container
+        run: docker build --pull -t kmp-ios-host-probe -f ci/kmp-ios-probe/Dockerfile .
+
+      - name: Run KMP compile and iOS framework boundary test
+        shell: bash
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/artifacts/linux"
+          mkdir -p "$RUNNER_TEMP/konan-cache" "$RUNNER_TEMP/gradle-cache"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/ci/kmp-ios-probe:/probe" \
+            -v "$GITHUB_WORKSPACE/artifacts/linux:/artifacts" \
+            -v "$RUNNER_TEMP/konan-cache:/root/.konan" \
+            -v "$RUNNER_TEMP/gradle-cache:/root/.gradle" \
+            -w /probe \
+            kmp-ios-host-probe \
+            /probe/run-probe.sh linux
+
+      - name: Upload Linux evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmp-ios-linux-docker-evidence
+          path: artifacts/linux/
+          if-no-files-found: warn
+          retention-days: 14
+
+  macos-reference:
+    name: macOS reference build
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check out probe
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle 9.7.0
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.7.0"
+          cache-disabled: true
+
+      - name: Record Apple toolchain
+        run: |
+          xcode-select -p
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Run KMP compile and iOS framework reference build
+        run: |
+          mkdir -p artifacts/macos
+          PROBE_RESULTS_DIR="$GITHUB_WORKSPACE/artifacts/macos" \
+            bash ci/kmp-ios-probe/run-probe.sh macos
+
+      - name: Upload macOS reference evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmp-ios-macos-reference-evidence
+          path: artifacts/macos/
+          if-no-files-found: warn
+          retention-days: 14
