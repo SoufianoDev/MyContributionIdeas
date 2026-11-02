@@ -13,7 +13,6 @@ fi
 RESULTS_DIR="${PROBE_RESULTS_DIR:-/artifacts}"
 mkdir -p "$RESULTS_DIR"
 RESULTS_DIR="$(cd "$RESULTS_DIR" && pwd)"
-SUMMARY="$RESULTS_DIR/summary.json"
 
 {
   echo "mode=$MODE"
@@ -37,38 +36,37 @@ COMPILE_STATUS=$?
 set -e
 
 find build -type f -printf '%P %s bytes\n' 2>/dev/null | sort >"$RESULTS_DIR/build-files-after-compile.txt" || true
-find build -type f -name '*.klib' -print 2>/dev/null | sort >"$RESULTS_DIR/klib-paths.txt" || true
 
 python3 - "$RESULTS_DIR" "$COMPILE_STATUS" <<'PY'
-import json, pathlib, sys, zipfile
+import json, pathlib, sys
 out = pathlib.Path(sys.argv[1])
 status = int(sys.argv[2])
-project = pathlib.Path.cwd()
-klibs = sorted(pathlib.Path("build").rglob("*.klib")) if pathlib.Path("build").exists() else []
-entries = []
-for path in klibs:
-    names = []
-    try:
-        with zipfile.ZipFile(path) as archive:
-            names = archive.namelist()
-    except Exception as exc:
-        names = [f"INSPECTION_ERROR: {exc}"]
-    llvm_entries = [name for name in names if name.lower().endswith((".bc", ".ll"))]
-    entries.append({
-        "path": str(path.relative_to(project)),
-        "bytes": path.stat().st_size,
-        "llvm_entries": llvm_entries[:100],
-        "llvm_entry_count": len(llvm_entries),
-    })
+root = pathlib.Path("build")
+packed = sorted(root.rglob("*.klib")) if root.exists() else []
+unpacked = []
+for manifest in sorted(root.rglob("manifest")) if root.exists() else []:
+    base = manifest.parent
+    if (base / "linkdata").is_dir() and (base / "ir").is_dir():
+        files = sorted(p for p in base.rglob("*") if p.is_file())
+        llvm = [p.relative_to(base).as_posix() for p in files if p.suffix.lower() in {".bc", ".ll"}]
+        unpacked.append({
+            "path": base.as_posix(),
+            "manifest_bytes": manifest.stat().st_size,
+            "file_count": len(files),
+            "files": [{"path": p.relative_to(base).as_posix(), "bytes": p.stat().st_size} for p in files],
+            "llvm_bitcode_or_ir_entries": llvm,
+        })
 (out / "klib-inventory.json").write_text(json.dumps({
     "compile_exit": status,
-    "klib_count": len(klibs),
-    "klibs": entries,
+    "packed_klib_count": len(packed),
+    "packed_klib_paths": [p.as_posix() for p in packed],
+    "unpacked_klib_count": len(unpacked),
+    "unpacked_klibs": unpacked,
 }, indent=2))
 PY
 
 if [[ "$COMPILE_STATUS" -ne 0 ]]; then
-  cat >"$SUMMARY" <<EOF
+  cat >"$RESULTS_DIR/summary.json" <<EOF
 {
   "mode": "$MODE",
   "compile_klib_exit": $COMPILE_STATUS,
@@ -89,30 +87,48 @@ set -e
 find build -type f -printf '%P %s bytes\n' 2>/dev/null | sort >"$RESULTS_DIR/build-files-after-link.txt" || true
 find build -type d -name 'Shared.framework' -print 2>/dev/null | sort >"$RESULTS_DIR/framework-paths.txt" || true
 
-python3 - "$MODE" "$COMPILE_STATUS" "$LINK_STATUS" "$RESULTS_DIR" <<'PY'
+FORCED_STATUS=null
+FORCED_HOST_GATE=false
+if [[ "$MODE" == "linux" ]]; then
+  set +e
+  gradle --no-daemon --console=plain --info --stacktrace --rerun-tasks \
+    -I "$SCRIPT_DIR/force-ios-link.init.gradle" linkDebugFrameworkIosArm64 \
+    >"$RESULTS_DIR/forced-link-framework.log" 2>&1
+  FORCED_STATUS=$?
+  set -e
+  if grep -Eqi 'Target .*iosArm64.*not available for output kind.*(linux_x64|linux)' "$RESULTS_DIR/forced-link-framework.log"; then
+    FORCED_HOST_GATE=true
+  fi
+  find build -type d -name 'Shared.framework' -print 2>/dev/null | sort >"$RESULTS_DIR/forced-framework-paths.txt" || true
+fi
+
+python3 - "$MODE" "$COMPILE_STATUS" "$LINK_STATUS" "$FORCED_STATUS" "$FORCED_HOST_GATE" "$RESULTS_DIR" <<'PY'
 import json, pathlib, re, sys
 mode, compile_status, link_status = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-out = pathlib.Path(sys.argv[4])
-log = (out / "link-framework.log").read_text(errors="replace")
+forced_status = None if sys.argv[4] == "null" else int(sys.argv[4])
+forced_host_gate = sys.argv[5].lower() == "true"
+out = pathlib.Path(sys.argv[6])
+link_log = (out / "link-framework.log").read_text(errors="replace")
 compile_log = (out / "compile-klib.log").read_text(errors="replace")
 klib_data = json.loads((out / "klib-inventory.json").read_text())
 host_block = bool(re.search(
     r"Target .*iosArm64.*not available for output kind.*(linux_x64|linux)",
-    log, re.IGNORECASE | re.DOTALL
+    link_log, re.IGNORECASE | re.DOTALL
 ))
-link_task_skipped = bool(re.search(r"> Task :linkDebugFrameworkIosArm64 SKIPPED", log))
+link_task_skipped = bool(re.search(r"> Task :linkDebugFrameworkIosArm64 SKIPPED", link_log))
 compile_task_skipped = bool(re.search(r"> Task :compileKotlinIosArm64 SKIPPED", compile_log))
-frameworks = [
-    str(p.relative_to(pathlib.Path.cwd()))
-    for p in pathlib.Path("build").rglob("Shared.framework")
-] if pathlib.Path("build").exists() else []
+frameworks = sorted(
+    p.as_posix() for p in pathlib.Path("build").rglob("Shared.framework")
+) if pathlib.Path("build").exists() else []
+forced_frameworks = []
+if (out / "forced-framework-paths.txt").exists():
+    forced_frameworks = [x for x in (out / "forced-framework-paths.txt").read_text().splitlines() if x]
 if mode == "linux":
     classification = (
-        "stock_host_gate_reproduced" if host_block else
-        "gradle_framework_task_skipped" if link_task_skipped else
-        "framework_output_found" if frameworks else
-        "framework_link_failed_for_another_reason" if link_status != 0 else
-        "framework_task_returned_zero_without_output"
+        "forced_compiler_host_gate_reproduced" if forced_host_gate else
+        "forced_link_produced_framework" if forced_status == 0 and forced_frameworks else
+        "forced_link_failed_for_another_reason" if forced_status not in (None, 0) else
+        "gradle_link_task_skipped"
     )
 else:
     classification = (
@@ -124,13 +140,17 @@ summary = {
     "mode": mode,
     "compile_klib_exit": compile_status,
     "compile_task_skipped": compile_task_skipped,
-    "klib_count": klib_data["klib_count"],
-    "klib_inventory": klib_data["klibs"],
+    "packed_klib_count": klib_data["packed_klib_count"],
+    "unpacked_klib_count": klib_data["unpacked_klib_count"],
+    "unpacked_klibs": klib_data["unpacked_klibs"],
     "framework_link_exit": link_status,
     "framework_task_skipped": link_task_skipped,
-    "explicit_linux_host_gate_detected": host_block,
+    "explicit_linux_host_gate_detected_in_normal_link": host_block,
+    "forced_framework_link_exit": forced_status,
+    "forced_compiler_host_gate_detected": forced_host_gate,
     "classification": classification,
     "framework_artifacts": frameworks,
+    "forced_framework_artifacts": forced_frameworks,
 }
 (out / "summary.json").write_text(json.dumps(summary, indent=2))
 print(json.dumps(summary, indent=2))
@@ -142,8 +162,4 @@ if [[ "$MODE" == "macos" ]]; then
   fi
 fi
 
-if [[ "$MODE" == "linux" && "$LINK_STATUS" -eq 0 && ! -s "$RESULTS_DIR/framework-paths.txt" ]]; then
-  echo "Gradle returned success but no iOS framework was produced; inspect task skip/output evidence." >&2
-fi
-
-echo "Probe completed. Preserve full Gradle logs, source/build inventories, KLIB inventory, and summary."
+echo "Probe completed. Preserve full Gradle logs, KLIB inventories, task-skip evidence, and summaries."
