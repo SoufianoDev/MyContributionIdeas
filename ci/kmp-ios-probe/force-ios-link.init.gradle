@@ -1,0 +1,10 @@
+gradle.projectsEvaluated {
+    rootProject.allprojects { project ->
+        project.tasks.matching { it.name == "linkDebugFrameworkIosArm64" }.all { task ->
+            task.enabled = true
+            task.doFirst {
+                logger.lifecycle("FORCED_IOS_LINK_TASK: enabled despite Kotlin/Native host support gate")
+            }
+        }
+    }
+}
