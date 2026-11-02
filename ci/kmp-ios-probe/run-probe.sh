@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 MODE="${1:?usage: run-probe.sh linux|macos}"
 if [[ "$MODE" != "linux" && "$MODE" != "macos" ]]; then
   echo "Unsupported mode: $MODE" >&2
