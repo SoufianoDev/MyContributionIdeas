@@ -13,6 +13,9 @@ LLVM_SHA="0b1f290214dd7ec20e2506210967e0ebd735cdefc3a3b4485bbccb439fa78e5b"
 MAC_SHA="bf4edb526d91e17d0862102f69250525d788e79011f86c2c64362749adf260ae"
 
 mkdir -p "$ARTIFACTS" "$WORK" "$GRADLE_USER_HOME" "$KONAN_DATA_DIR"
+cat > "$GRADLE_USER_HOME/gradle.properties" <<'EOF'
+org.gradle.java.installations.paths=/usr/lib/jvm/java-17-openjdk-amd64,/usr/lib/jvm/java-21-openjdk-amd64
+EOF
 exec > >(tee -a "$ARTIFACTS/run.log") 2>&1
 
 echo "=== ENVIRONMENT ==="

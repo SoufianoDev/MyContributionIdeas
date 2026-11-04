@@ -5,6 +5,7 @@ This experiment lives only in the research branch. It clones Kotlin/Native tag v
 ## Safety boundary
 
 - No source changes are made to JetBrains' repository or to the research repository at runtime.
+- The container installs JDK 17 and JDK 21 because Kotlin's Gradle build requests both toolchains; Gradle is explicitly pointed at both installations.
 - The compiler source checkout and all modifications are disposable CI workspace data.
 - The Apple SDK/sysroot path is an empty placeholder directory. It is not an SDK and contains no SDK headers, libraries, frameworks, or metadata.
 - The experiment must stop before any final Apple linker command. A test-only guard in the temporary compiler source prevents LinkerPhase from invoking linker commands.
