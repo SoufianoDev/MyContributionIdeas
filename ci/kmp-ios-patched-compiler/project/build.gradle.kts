@@ -24,7 +24,6 @@ kotlin {
 tasks.withType<KotlinNativeLink>().configureEach {
     if (name == "linkDebugExecutableIosArm64") {
         toolOptions.freeCompilerArgs.addAll(
-            "-Xdisable-phases=Linker",
             "-Xsave-llvm-ir-after=Codegen",
             "-Xsave-llvm-ir-after=LinkBitcodeDependencies",
             "-Xsave-llvm-ir-directory=/artifacts/project-llvm-ir",
