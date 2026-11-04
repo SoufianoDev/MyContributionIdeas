@@ -285,7 +285,9 @@ echo "PATCHED_TARGET_LIST_EXIT=$TARGET_LIST_STATUS"
 grep -n -E 'ios_arm64|linux_x64' "$ARTIFACTS/patched-target-list.log" || true
 
 echo "=== CONFIGURE REAL KMP PROJECT ==="
-PROJECT="$RESEARCH/ci/kmp-ios-patched-compiler/project"
+PROJECT="$WORK/project"
+rm -rf "$PROJECT"
+cp -a "$RESEARCH/ci/kmp-ios-patched-compiler/project" "$PROJECT"
 cat > "$PROJECT/gradle.properties" <<EOF
 kotlin.native.home=$KONAN_HOME
 kotlin.native.enableKlibsCrossCompilation=true
