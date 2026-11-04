@@ -42,12 +42,13 @@ download_verified "$MAC_URL" "$MAC_ARCHIVE" "$MAC_SHA"
 
 mkdir -p "$WORK/llvm"
 tar -xzf "$LLVM_ARCHIVE" -C "$WORK/llvm"
-LLVM_BIN="$(find "$WORK/llvm" -mindepth 1 -maxdepth 4 -type f -path '*/bin/clang++' -printf '%h\n' | head -1)"
-if [[ -z "$LLVM_BIN" ]]; then
-  echo "Could not locate clang++ in the verified LLVM essentials archive" >&2
+LLVM_CLANGXX="$(find "$WORK/llvm" -mindepth 1 -maxdepth 6 \( -type f -o -type l \) -path '*/bin/clang++' -print -quit)"
+if [[ -z "$LLVM_CLANGXX" ]]; then
+  echo "Could not locate clang++ (including symlinks) in the verified LLVM essentials archive" >&2
+  find "$WORK/llvm" -maxdepth 6 -name 'clang*' -print | head -80 || true
   exit 20
 fi
-LLVM_HOME="$(dirname "$LLVM_BIN")"
+LLVM_HOME="$(dirname "$(dirname "$LLVM_CLANGXX")")"
 "$LLVM_HOME/bin/clang++" --version
 [[ "$("$LLVM_HOME/bin/clang++" --version | head -1)" == *"21.1.6"* ]] || {
   echo "Unexpected compiler version under $LLVM_HOME" >&2
@@ -194,12 +195,12 @@ replace_once(
     """    fun makeObjectFile(bitcodeFile: File, objectFile: File) =
             when (val configurables = platform.configurables) {
                 is ClangFlags -> clang(configurables, bitcodeFile, objectFile)
-                else -> error("Unsupported configurables kind")
+                else -> error("Unsupported configurables kind: ${configurables::class.simpleName}!")
             }""",
     """    fun makeObjectFile(bitcodeFile: File, objectFile: File) {
         when (val configurables = platform.configurables) {
             is ClangFlags -> clang(configurables, bitcodeFile, objectFile)
-            else -> error("Unsupported configurables kind")
+            else -> error("Unsupported configurables kind: ${configurables::class.simpleName}!")
         }
         val preserveDir = System.getenv("KONAN_PRESERVE_OBJECTS_DIR")
         if (!preserveDir.isNullOrBlank() && objectFile.isFile) {
@@ -212,6 +213,15 @@ replace_once(
     }"""
 )
 
+linker = "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/Linker.kt"
+replace_once(
+    linker,
+    """internal fun runLinkerCommands(context: NativeBackendPhaseContext, commands: List<Command>, cachingInvolved: Boolean) = try {""",
+    """internal fun runLinkerCommands(context: NativeBackendPhaseContext, commands: List<Command>, cachingInvolved: Boolean) =
+    if (System.getenv("KONAN_PROBE_STOP_BEFORE_FINAL_LINK") == "1") {
+        context.log("KONAN_PROBE_FINAL_LINK_SKIPPED commands=" + commands.size)
+    } else try {"""
+)
 linker = "kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/driver/phases/Linker.kt"
 replace_once(
     linker,
